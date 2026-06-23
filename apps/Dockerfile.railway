@@ -1,0 +1,32 @@
+# ---------- Órbita API — Dockerfile para RAILWAY ----------
+# Diferença para o Dockerfile do VPS: aqui as migrations rodam no BOOT
+# (start:prod = prisma migrate deploy && node dist/main.js), porque no Railway
+# não há passo de deploy manual. O prisma CLI fica disponível na imagem final.
+
+FROM node:20-slim AS builder
+WORKDIR /app
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+COPY package*.json ./
+COPY prisma ./prisma
+RUN npm ci
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+# NÃO removemos devDependencies aqui: o prisma CLI é necessário para migrate deploy no boot.
+
+FROM node:20-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+RUN apt-get update -y && apt-get install -y openssl curl && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+# Railway injeta a porta via $PORT; a API lê process.env.PORT (default 3333).
+EXPOSE 3333
+
+# Aplica migrations e sobe a API. Idempotente: migrate deploy só aplica o que falta.
+CMD ["npm", "run", "start:prod"]
